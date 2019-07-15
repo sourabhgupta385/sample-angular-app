@@ -1,5 +1,5 @@
 def readProperties(){
-	def properties_file_path = "${workspace}" + "/properties.yml"
+	def properties_file_path = "${workspace}" + "@script/properties.yml"
 	def property = readYaml file: properties_file_path
 
     env.APP_NAME = property.APP_NAME
@@ -14,186 +14,52 @@ def readProperties(){
     env.LOAD_TESTING = property.LOAD_TESTING
 }
 
-podTemplate(cloud: 'kubernetes', 
-			containers: [
-                containerTemplate(command: 'cat', image: 'garunski/alpine-chrome:latest', name: 'jnlp-chrome', ttyEnabled: true, workingDir: '/home/jenkins'), 
-				containerTemplate(command: '', image: 'selenium/standalone-chrome:3.14', name: 'jnlp-selenium', ports: [portMapping(containerPort: 4444)], ttyEnabled: false, workingDir: '/home/jenkins')],
-			label: 'jenkins-pipeline', 
-			name: 'jenkins-pipeline'  
-			){
+
+
 node{
-   def NODEJS_HOME = tool "NODE_PATH"
-   env.PATH="${env.PATH}:${NODEJS_HOME}/bin"
-   
-    stage('Checkout'){
-       def myRepo = checkout scm
-       env.gitCommit = myRepo.GIT_COMMIT
-       env.gitBranch = myRepo.GIT_BRANCH
-       readProperties()
-       println(myRepo)
+
+	stage('Read Properties') {
+        readProperties()
     }
-  
-    node ('jenkins-pipeline'){
-        container ('jnlp-chrome'){
-            stage('Initial Setup'){
-              checkout scm
-              sh 'npm install'
-            }
+	
+	def NODEJS_HOME = tool "NODE_PATH"
+	env.PATH="${env.PATH}:${NODEJS_HOME}/bin"
    
-            if(env.UNIT_TESTING == 'True'){
-                stage('Unit Testing'){
-                    sh ' $(npm bin)/ng test -- --no-watch --no-progress --browsers Chrome_no_sandbox'
-   	            }
-            }
-  
-            if(env.CODE_COVERAGE == 'True'){
-                stage('Code Coverage'){
-	                sh ' $(npm bin)/ng test -- --no-watch --no-progress --code-coverage --browsers Chrome_no_sandbox'
-   	            }
-            }
-   
-            if(env.CODE_QUALITY == 'True'){
-                stage('Code Quality Analysis'){ 
-                    sh 'npm run lint'
-                }
-            }
-        }
-    }
-    podTemplate(label: 'dockerNode', yaml: """
-apiVersion: v1
-kind: Pod
-spec:
-  containers:
-  - name: docker
-    image: docker:1.11
-    command: ['cat']
-    tty: true
-    volumeMounts:
-    - name: dockersock
-      mountPath: /var/run/docker.sock
-  volumes:
-  - name: dockersock
-    hostPath:
-      path: /var/run/docker.sock
-"""
-  ){
-    node('dockerNode') {
-		stage('Dev - Build Application') {
-			container('docker') {
-				checkout([$class: 'GitSCM', branches: [[name: "master"]], doGenerateSubmoduleConfigurations: false, extensions: [], submoduleCfg: [], userRemoteConfigs: [[url: "https://github.com/sourabhgupta385/sample-angular-app"]]])
-                withCredentials([[$class: 'UsernamePasswordMultiBinding',
-                    credentialsId: 'dockerhub',
-                    usernameVariable: 'DOCKER_HUB_USER',
-                    passwordVariable: 'DOCKER_HUB_PASSWORD']]) {
-                        sh """
-                                docker login -u ${DOCKER_HUB_USER} -p ${DOCKER_HUB_PASSWORD}
-                                docker build -t ${DOCKER_HUB_USER}/myapp:${gitCommit} .
-                                docker push ${DOCKER_HUB_USER}/myapp:${gitCommit}
-                        """
-                    }
-			}
-		}
+	stage('Checkout'){
+       checkout([$class: 'GitSCM', branches: [[name: "*/${BRANCH}"]], doGenerateSubmoduleConfigurations: false, extensions: [], submoduleCfg: [], userRemoteConfigs: [[credentialsId: "${GIT_CREDENTIALS}", url: "${GIT_SOURCE_URL}"]]])
+       env.WORKSPACE = "${workspace}"
 	}
-}
-  //code to create pull request
-  if("${gitBranch}" == "developer1" || "${gitBranch}" == "feature1" || "${gitBranch}" == "development"){
-    stage('Create Pull Request'){
-        sh 'git request-pull feature1 ./'
-    }
-  }
   
-podTemplate(label: 'kubectlnode', containers: [
-  containerTemplate(name: 'kubectl', image: 'lachlanevenson/k8s-kubectl:v1.8.8', command: 'cat', ttyEnabled: true, workingDir: '/home/jenkins')]
-) {
-  node('kubectlnode') {
-    
-    if("${gitBranch}" == "developer1" || "${gitBranch}" == "feature1"){
-        
-        stage('Dev - Deploy Application') {
-            container('kubectl') {
-                checkout scm
-                CHECK_DEV_DEPLOYMENT = sh (script: 'kubectl get deployment sample-angular-app -n dev', returnStatus: true)
-                if(CHECK_DEV_DEPLOYMENT == 1){
-                    //Create new deployment and service  
-                    sh 'kubectl create -f sample-app-kube.yaml -n dev'
-                }
-                else{
-                    //Update previous deployment with new image  
-                    sh "kubectl set image deployment/sample-angular-app sample-angular-app=sourabh385/myapp:${gitCommit} -n dev"
-                }
-            }
-        }
+    stage('Initial Setup'){
+        sh 'npm install'
     }
-    
-    if("${gitBranch}" == "development"){
-        
-        stage('Deploy to test environment?'){
-            input "Deploy to Testing Environment?"
-        }
-        
-        stage('Test - Deploy Application') {
-            container('kubectl') {
-                checkout scm
-                CHECK_TEST_DEPLOYMENT = sh (script: 'kubectl get deployment sample-angular-app -n test', returnStatus: true)
-                if(CHECK_TEST_DEPLOYMENT == 1){
-                    //Create new deployment and service  
-                    sh 'kubectl create -f sample-app-kube.yaml -n test'
-                }
-                else{
-                    //Update previous deployment with new image  
-                    sh "kubectl set image deployment/sample-angular-app sample-angular-app=sourabh385/myapp:${gitCommit} -n test"
-                }
-            }
-        }
-    }
-  }
-}
-        if("${gitBranch}" == "development"){
-            if(env.FUNCTIONAL_TESTING == 'True'){
-                node ('jenkins-pipeline'){
-                    container ('jnlp-chrome'){
-                        stage("Functional Testing"){
-                            checkout scm
-                            sh 'npm install'
-                            sh '$(npm bin)/ng e2e -- --protractor-config=e2e/protractor.conf.js'
-                        }
-                    }
-                }
-            }
    
-            if(env.LOAD_TESTING == 'True'){
-                stage("Load Testing"){
-                    sh 'artillery run -o load.json perfTest.yml' 
-                }
-            }
-        }
+    if(env.UNIT_TESTING == 'True'){
+        stage('Unit Testing'){   
+            sh ' $(npm bin)/ng test -- --no-watch --no-progress --browsers Chrome_no_sandbox'
+   	    }
+    }
   
-        if("${gitBranch}" == "master"){
-            podTemplate(label: 'kubectlnode', containers: [
-                containerTemplate(name: 'kubectl', image: 'lachlanevenson/k8s-kubectl:v1.8.8', command: 'cat', ttyEnabled: true)
-            ]) {
-                    node('kubectlnode') {
-                        
-                        stage('Deploy to prod environment?'){
-                            input "Deploy to Production Environment?"
-                        }
-                        
-                        stage('Prod - Deploy Application') {
-                            container('kubectl') {
-                                checkout scm
-                                CHECK_PROD_DEPLOYMENT = sh (script: 'kubectl get deployment sample-angular-app -n prod', returnStatus: true)
-                                if(CHECK_PROD_DEPLOYMENT == 1){
-                                    //Create new deployment and service  
-                                    sh 'kubectl create -f sample-app-kube.yaml -n prod'
-                                }
-                                else{
-                                    //Update previous deployment with new image  
-                                    sh "kubectl set image deployment/sample-angular-app sample-angular-app=sourabh385/myapp:${gitCommit} -n prod"
-                                }
-                            }
-                        }
-                    }
-            }
+    if(env.CODE_COVERAGE == 'True'){
+        stage('Code Coverage'){	        
+	        sh ' $(npm bin)/ng test -- --no-watch --no-progress --code-coverage --browsers Chrome_no_sandbox'
+   	    }
+    }
+   
+    if(env.CODE_QUALITY == 'True'){
+        stage('Code Quality Analysis'){ 
+            sh 'npm run lint'
         }
-}
-}
+    }
+	
+	stage('Build Application'){
+		sh "npm run build"
+	}
+	
+	if(env.LOAD_TESTING == 'True'){
+        stage("Load Testing"){
+            sh 'artillery run -o load.json perfTest.yml' 
+        }
+    }
+}	
+    
