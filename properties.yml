@@ -1,6 +1,6 @@
 APP_NAME: 'angular-demo'
 MS_NAME: 'sample-angular-app'
-BRANCH: 'master'
+BRANCH: 'test'
 GIT_SOURCE_URL: 'https://github.com/sourabhgupta385/sample-angular-app.git'
 GIT_CREDENTIALS: 'abcdefghihjklmn'
 CODE_QUALITY: 'True'
